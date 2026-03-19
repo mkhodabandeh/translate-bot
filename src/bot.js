@@ -134,14 +134,15 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
 
 // ── Forwarded message handler ───────────────────────────────────────
 bot.on('message', async (msg) => {
-  // Only handle forwarded messages (ignore commands and regular messages)
-  if (!msg.forward_origin && !msg.forward_from && !msg.forward_from_chat && !msg.forward_date) return;
+  // Only handle forwarded messages — forward_date is a Unix timestamp
+  // that Telegram only sets on forwarded messages (always > 0)
+  if (!msg.forward_date) return;
 
   // Skip if this message is a command (let the command handler deal with it)
   if (msg.text && COMMAND_REGEX.test(msg.text)) return;
 
   const originalText = msg.text || msg.caption;
-  if (!originalText) return;  // no text to translate (e.g. forwarded sticker/photo)
+  if (!originalText || originalText.length < 2) return;  // skip empty/trivial
 
   const chatId = msg.chat.id;
 
