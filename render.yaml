@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: translate-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: NODE_ENV
+        value: production
