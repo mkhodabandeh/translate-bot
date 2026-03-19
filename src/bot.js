@@ -132,43 +132,6 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
   }
 });
 
-// ── Forwarded message handler ───────────────────────────────────────
-bot.on('message', async (msg) => {
-  // Only handle forwarded messages — forward_date is a Unix timestamp
-  // that Telegram only sets on forwarded messages (always > 0)
-  if (!msg.forward_date) return;
-
-  // Skip if this message is a command (let the command handler deal with it)
-  if (msg.text && COMMAND_REGEX.test(msg.text)) return;
-
-  const originalText = msg.text || msg.caption;
-  if (!originalText || originalText.length < 2) return;  // skip empty/trivial
-
-  const chatId = msg.chat.id;
-
-  try {
-    const result = await translate(originalText, { to: DEFAULT_TARGET });
-
-    // Don't translate if already in the target language
-    if (result.from.language.iso === DEFAULT_TARGET) return;
-
-    const from = friendlyName(result.from.language.iso);
-    const to = friendlyName(DEFAULT_TARGET);
-
-    const response =
-      `🌐 *Translation* (${from} → ${to}):\n\n` +
-      `${result.text}`;
-
-    await bot.sendMessage(chatId, response, {
-      parse_mode: 'Markdown',
-      reply_to_message_id: msg.message_id,
-    });
-  } catch (err) {
-    console.error('Forwarded message translation error:', err);
-    // Silently fail for auto-translations to avoid spamming the chat
-  }
-});
-
 // ── Error handling ──────────────────────────────────────────────────
 bot.on('polling_error', (err) => {
   console.error('Polling error:', err.message);
