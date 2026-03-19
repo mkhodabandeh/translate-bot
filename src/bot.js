@@ -84,7 +84,10 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
     );
   }
 
-  const originalText = msg.reply_to_message.text || msg.reply_to_message.caption;
+  const replied = msg.reply_to_message;
+  const originalText = replied.text || replied.caption
+    || (replied.poll && replied.poll.question)  // polls
+    || null;
 
   if (!originalText) {
     return bot.sendMessage(
@@ -126,6 +129,42 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
       '❌ Sorry, something went wrong with the translation. Please try again.',
       { reply_to_message_id: msg.message_id }
     );
+  }
+});
+
+// ── Forwarded message handler ───────────────────────────────────────
+bot.on('message', async (msg) => {
+  // Only handle forwarded messages (ignore commands and regular messages)
+  if (!msg.forward_origin && !msg.forward_from && !msg.forward_from_chat && !msg.forward_date) return;
+
+  // Skip if this message is a command (let the command handler deal with it)
+  if (msg.text && COMMAND_REGEX.test(msg.text)) return;
+
+  const originalText = msg.text || msg.caption;
+  if (!originalText) return;  // no text to translate (e.g. forwarded sticker/photo)
+
+  const chatId = msg.chat.id;
+
+  try {
+    const result = await translate(originalText, { to: DEFAULT_TARGET });
+
+    // Don't translate if already in the target language
+    if (result.from.language.iso === DEFAULT_TARGET) return;
+
+    const from = friendlyName(result.from.language.iso);
+    const to = friendlyName(DEFAULT_TARGET);
+
+    const response =
+      `🌐 *Translation* (${from} → ${to}):\n\n` +
+      `${result.text}`;
+
+    await bot.sendMessage(chatId, response, {
+      parse_mode: 'Markdown',
+      reply_to_message_id: msg.message_id,
+    });
+  } catch (err) {
+    console.error('Forwarded message translation error:', err);
+    // Silently fail for auto-translations to avoid spamming the chat
   }
 });
 
