@@ -1,8 +1,8 @@
 require('dotenv').config();
 const http = require('http');
 const TelegramBot = require('node-telegram-bot-api');
-const translate = require('google-translate-api-x');
-const { resolveLanguage, LANGUAGE_MAP } = require('./languages');
+const translate = require('baidu-translate-api');
+const { resolveLanguage, CODE_TO_NAME } = require('./languages');
 
 // ── Health-check server (keeps Render free tier alive) ──────────────
 const PORT = process.env.PORT || 3000;
@@ -27,7 +27,7 @@ if (!BOT_TOKEN) {
 // ── Bot setup ───────────────────────────────────────────────────────
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-console.log('🤖  Translate Bot is running…');
+console.log('🤖  Translate Bot is running… (Baidu Translate)');
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -35,9 +35,9 @@ console.log('🤖  Translate Bot is running…');
  * Parse the text after /translate or /tr.
  * Accepted patterns:
  *   /translate                → target = default (en)
- *   /translate to farsi       → target = fa
- *   /translate farsi          → target = fa  (shorthand without "to")
- *   /translate to zh-TW       → target = zh-TW (ISO code)
+ *   /translate to chinese     → target = zh
+ *   /translate french         → target = fra  (shorthand without "to")
+ *   /translate to kor         → target = kor (Baidu code)
  */
 function parseTarget(text) {
   if (!text) return { target: DEFAULT_TARGET, raw: null };
@@ -53,11 +53,11 @@ function parseTarget(text) {
 }
 
 /**
- * Find a friendly name for an ISO code (for display purposes).
+ * Find a friendly name for a Baidu language code (for display purposes).
  */
 function friendlyName(code) {
-  const entry = Object.entries(LANGUAGE_MAP).find(([, v]) => v === code);
-  return entry ? capitalize(entry[0]) : code;
+  const name = CODE_TO_NAME[code];
+  return name ? capitalize(name) : code;
 }
 
 function capitalize(s) {
@@ -78,7 +78,7 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
       '💡 Reply to a message with /translate (or /tr) to translate it.\n\n' +
         'Examples:\n' +
         '• `/translate` — translate to English\n' +
-        '• `/translate to farsi` — translate to Farsi\n' +
+        '• `/translate to chinese` — translate to Chinese\n' +
         '• `/tr to spanish` — translate to Spanish',
       { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
     );
@@ -86,7 +86,7 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
 
   const replied = msg.reply_to_message;
   const originalText = replied.text || replied.caption
-    || (replied.poll && replied.poll.question)  // polls
+    || (replied.poll && replied.poll.question)
     || null;
 
   if (!originalText) {
@@ -103,7 +103,7 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
   if (!target) {
     return bot.sendMessage(
       chatId,
-      `❌ Unknown language: *${raw}*\n\nTry a language name like \`farsi\`, \`spanish\`, \`german\`, or an ISO code like \`fa\`, \`es\`, \`de\`.`,
+      `❌ Unknown language: *${raw}*\n\nTry a language name like \`chinese\`, \`spanish\`, \`german\`, or a Baidu code like \`zh\`, \`spa\`, \`de\`.`,
       { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
     );
   }
@@ -111,12 +111,12 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
   try {
     const result = await translate(originalText, { to: target });
 
-    const from = friendlyName(result.from.language.iso);
+    const from = friendlyName(result.from);
     const to = friendlyName(target);
 
     const response =
       `🌐 *Translation* (${from} → ${to}):\n\n` +
-      `${result.text}`;
+      `${result.trans_result.dst}`;
 
     await bot.sendMessage(chatId, response, {
       parse_mode: 'Markdown',
@@ -148,7 +148,7 @@ bot.onText(AUTO_REGEX, async (msg, match) => {
   if (!target) {
     return bot.sendMessage(
       chatId,
-      `❌ Unknown language: *${raw}*\n\nTry: \`/auto to farsi\`, \`/auto spanish\`, \`/auto de\``,
+      `❌ Unknown language: *${raw}*\n\nTry: \`/auto to chinese\`, \`/auto spanish\`, \`/auto de\``,
       { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
     );
   }
@@ -206,14 +206,14 @@ bot.on('message', async (msg) => {
     const result = await translate(originalText, { to: autoConfig.target });
 
     // Don't translate if already in the target language
-    if (result.from.language.iso === autoConfig.target) return;
+    if (result.from === autoConfig.target) return;
 
-    const from = friendlyName(result.from.language.iso);
+    const from = friendlyName(result.from);
     const to = friendlyName(autoConfig.target);
 
     const response =
       `🌐 *Translation* (${from} → ${to}):\n\n` +
-      `${result.text}`;
+      `${result.trans_result.dst}`;
 
     await bot.sendMessage(chatId, response, {
       parse_mode: 'Markdown',

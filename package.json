@@ -7,8 +7,8 @@
     "start": "node src/bot.js"
   },
   "dependencies": {
+    "baidu-translate-api": "^0.4.3",
     "dotenv": "^16.4.7",
-    "google-translate-api-x": "^10.7.1",
     "node-telegram-bot-api": "^0.67.0"
   }
 }
