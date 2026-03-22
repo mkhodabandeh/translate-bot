@@ -46,7 +46,7 @@ async function transcribe(audioBuffer, filename = 'voice.oga') {
       input,
       {
         transcription_config: {
-          language: 'auto',
+          language: 'fa',
         },
       },
       'txt',  // use plain text format for simplicity
