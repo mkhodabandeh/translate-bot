@@ -94,6 +94,14 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
   }
 
   const replied = msg.reply_to_message;
+
+  // If it's a voice message, suggest /transcribe instead
+  if (replied.voice || replied.audio || replied.video_note) {
+    return bot.sendMessage(chatId,
+      '🎤 That\'s a voice message! Use /transcribe to transcribe it.',
+      { reply_to_message_id: msg.message_id });
+  }
+
   const originalText = replied.text || replied.caption
     || (replied.poll && replied.poll.question) || null;
 

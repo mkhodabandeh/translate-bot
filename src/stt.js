@@ -23,11 +23,12 @@ function getClient() {
 async function transcribe(audioBuffer, filename = 'voice.oga') {
   const sm = getClient();
 
+  // Use { data, fileName } format for Node.js compatibility
+  // (File constructor may not be available in all Node versions)
   const blob = new Blob([audioBuffer]);
-  const file = new File([blob], filename);
 
   const response = await sm.transcribe(
-    file,
+    { data: blob, fileName: filename },
     {
       transcription_config: {
         language: 'auto',
