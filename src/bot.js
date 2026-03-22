@@ -132,6 +132,98 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
   }
 });
 
+// ── Per-chat auto-translate state ───────────────────────────────────
+// Map<chatId, { target: string }>  — only present when auto mode is ON
+const autoTranslateChats = new Map();
+
+// ── /auto command handler ───────────────────────────────────────────
+const AUTO_REGEX = /^\/auto(?:@\w+)?\s*(.*)?$/i;
+
+bot.onText(AUTO_REGEX, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const commandArgs = (match[1] || '').trim();
+
+  const { target, raw } = parseTarget(commandArgs);
+
+  if (!target) {
+    return bot.sendMessage(
+      chatId,
+      `❌ Unknown language: *${raw}*\n\nTry: \`/auto to farsi\`, \`/auto spanish\`, \`/auto de\``,
+      { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
+    );
+  }
+
+  autoTranslateChats.set(chatId, { target });
+  const to = friendlyName(target);
+
+  await bot.sendMessage(
+    chatId,
+    `✅ Auto-translate is *ON*\n\nForwarded messages will be translated to *${to}*.\nUse /autooff to disable.`,
+    { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
+  );
+});
+
+// ── /autooff command handler ────────────────────────────────────────
+const AUTOOFF_REGEX = /^\/autooff(?:@\w+)?\s*$/i;
+
+bot.onText(AUTOOFF_REGEX, async (msg) => {
+  const chatId = msg.chat.id;
+
+  if (!autoTranslateChats.has(chatId)) {
+    return bot.sendMessage(
+      chatId,
+      '💡 Auto-translate is already off.',
+      { reply_to_message_id: msg.message_id }
+    );
+  }
+
+  autoTranslateChats.delete(chatId);
+  await bot.sendMessage(
+    chatId,
+    '🔴 Auto-translate is *OFF*',
+    { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
+  );
+});
+
+// ── Auto-translate forwarded messages ───────────────────────────────
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+
+  // Only act if auto mode is on for this chat
+  const autoConfig = autoTranslateChats.get(chatId);
+  if (!autoConfig) return;
+
+  // Only translate forwarded messages
+  if (!msg.forward_date) return;
+
+  // Skip commands
+  if (msg.text && (COMMAND_REGEX.test(msg.text) || AUTO_REGEX.test(msg.text))) return;
+
+  const originalText = msg.text || msg.caption;
+  if (!originalText || originalText.length < 2) return;
+
+  try {
+    const result = await translate(originalText, { to: autoConfig.target });
+
+    // Don't translate if already in the target language
+    if (result.from.language.iso === autoConfig.target) return;
+
+    const from = friendlyName(result.from.language.iso);
+    const to = friendlyName(autoConfig.target);
+
+    const response =
+      `🌐 *Translation* (${from} → ${to}):\n\n` +
+      `${result.text}`;
+
+    await bot.sendMessage(chatId, response, {
+      parse_mode: 'Markdown',
+      reply_to_message_id: msg.message_id,
+    });
+  } catch (err) {
+    console.error('Auto-translate error:', err);
+  }
+});
+
 // ── Error handling ──────────────────────────────────────────────────
 bot.on('polling_error', (err) => {
   console.error('Polling error:', err.message);
