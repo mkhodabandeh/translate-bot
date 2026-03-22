@@ -105,11 +105,42 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
 
   const replied = msg.reply_to_message;
 
-  // If it's a voice message, suggest /transcribe instead
-  if (replied.voice || replied.audio || replied.video_note) {
+  const { target, raw } = parseTarget(commandArgs);
+  if (!target) {
     return bot.sendMessage(chatId,
-      '🎤 That\'s a voice message! Use /transcribe to transcribe it.',
-      { reply_to_message_id: msg.message_id });
+      `❌ Unknown language: *${raw}*\n\nTry a language name like \`chinese\`, \`spanish\`, \`german\`, or a Baidu code like \`zh\`, \`spa\`, \`de\`.`,
+      { parse_mode: 'Markdown', reply_to_message_id: msg.message_id });
+  }
+
+  // If it's a voice message, transcribe first then translate
+  const voice = replied.voice || replied.audio || replied.video_note;
+  if (voice) {
+    try {
+      console.log('[BOT] /translate on voice message — transcribing first');
+      await bot.sendChatAction(chatId, 'typing');
+      const audioBuffer = await downloadTelegramFile(voice.file_id);
+      const { text: transcribedText } = await transcribe(audioBuffer, 'voice.oga');
+
+      if (!transcribedText || transcribedText.trim().length === 0) {
+        return bot.sendMessage(chatId,
+          '⚠️ Could not transcribe — no speech detected.',
+          { reply_to_message_id: replied.message_id });
+      }
+
+      const result = await translate(transcribedText, { to: target });
+      const from = friendlyName(result.from);
+      const to = friendlyName(target);
+      const response = `🎤 *Transcription:*\n\n${transcribedText}\n\n🌐 *Translation* (${from} → ${to}):\n\n${result.trans_result.dst}`;
+      return bot.sendMessage(chatId, response, {
+        parse_mode: 'Markdown',
+        reply_to_message_id: replied.message_id,
+      });
+    } catch (err) {
+      console.error('[BOT] Transcribe+translate error:', err);
+      return bot.sendMessage(chatId,
+        '❌ Sorry, something went wrong transcribing/translating the voice message.',
+        { reply_to_message_id: msg.message_id });
+    }
   }
 
   const originalText = replied.text || replied.caption
@@ -119,13 +150,6 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
     return bot.sendMessage(chatId,
       '⚠️ The replied message has no text to translate.',
       { reply_to_message_id: msg.message_id });
-  }
-
-  const { target, raw } = parseTarget(commandArgs);
-  if (!target) {
-    return bot.sendMessage(chatId,
-      `❌ Unknown language: *${raw}*\n\nTry a language name like \`chinese\`, \`spanish\`, \`german\`, or a Baidu code like \`zh\`, \`spa\`, \`de\`.`,
-      { parse_mode: 'Markdown', reply_to_message_id: msg.message_id });
   }
 
   try {
@@ -138,7 +162,7 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
       reply_to_message_id: replied.message_id,
     });
   } catch (err) {
-    console.error('Translation error:', err);
+    console.error('[BOT] Translation error:', err);
     await bot.sendMessage(chatId,
       '❌ Sorry, something went wrong with the translation. Please try again.',
       { reply_to_message_id: msg.message_id });
@@ -167,9 +191,13 @@ bot.onText(TRANSCRIBE_REGEX, async (msg) => {
   }
 
   try {
+    console.log(`[BOT] /transcribe — chat ${chatId}, voice file_id: ${voice.file_id}, duration: ${voice.duration}s`);
     await bot.sendChatAction(chatId, 'typing');
+    console.log('[BOT] Downloading voice file from Telegram...');
     const audioBuffer = await downloadTelegramFile(voice.file_id);
+    console.log(`[BOT] Downloaded ${audioBuffer.length} bytes, sending to STT...`);
     const { text } = await transcribe(audioBuffer, 'voice.oga');
+    console.log(`[BOT] Transcription result: ${text ? text.length : 0} chars`);
 
     if (!text || text.trim().length === 0) {
       return bot.sendMessage(chatId,
@@ -181,7 +209,8 @@ bot.onText(TRANSCRIBE_REGEX, async (msg) => {
       `🎤 *Transcription:*\n\n${text}`,
       { parse_mode: 'Markdown', reply_to_message_id: replied.message_id });
   } catch (err) {
-    console.error('Transcription error:', err);
+    console.error('[BOT] Transcription error:', err.message);
+    console.error('[BOT] Full error:', err);
     await bot.sendMessage(chatId,
       '❌ Sorry, something went wrong with the transcription.',
       { reply_to_message_id: msg.message_id });
