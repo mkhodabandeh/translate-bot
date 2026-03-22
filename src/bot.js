@@ -31,6 +31,8 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 console.log('🤖  Translate Bot is running… (Baidu Translate + Speechmatics)');
 
+const BOT_VERSION = require('../package.json').version;
+
 // ── Register command menu with Telegram ─────────────────────────────
 bot.setMyCommands([
   { command: 'translate', description: 'Reply to a message to translate it' },
@@ -39,7 +41,15 @@ bot.setMyCommands([
   { command: 'autotranslate', description: 'Auto-translate forwarded texts (e.g. /autotranslate to chinese)' },
   { command: 'autotranscribe', description: 'Auto-transcribe forwarded voice messages' },
   { command: 'autooff', description: 'Turn off all auto modes' },
+  { command: 'version', description: 'Show bot version' },
 ]);
+
+// ── /version command ────────────────────────────────────────────────
+bot.onText(/^\/version(?:@\w+)?\s*$/i, async (msg) => {
+  await bot.sendMessage(msg.chat.id,
+    `🤖 Translate Bot v${BOT_VERSION}`,
+    { reply_to_message_id: msg.message_id });
+});
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
