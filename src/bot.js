@@ -1,8 +1,10 @@
 require('dotenv').config();
 const http = require('http');
+const https = require('https');
 const TelegramBot = require('node-telegram-bot-api');
 const translate = require('baidu-translate-api');
 const { resolveLanguage, CODE_TO_NAME } = require('./languages');
+const { transcribe } = require('./stt');
 
 // ── Health-check server (keeps Render free tier alive) ──────────────
 const PORT = process.env.PORT || 3000;
@@ -33,6 +35,7 @@ console.log('🤖  Translate Bot is running… (Baidu Translate)');
 bot.setMyCommands([
   { command: 'translate', description: 'Reply to a message to translate it' },
   { command: 'tr', description: 'Short alias for /translate' },
+  { command: 'transcribe', description: 'Reply to a voice message to transcribe it' },
   { command: 'auto', description: 'Auto-translate forwarded messages (e.g. /auto to chinese)' },
   { command: 'autooff', description: 'Turn off auto-translate' },
 ]);
@@ -70,6 +73,23 @@ function friendlyName(code) {
 
 function capitalize(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Download a file from Telegram's servers and return it as a Buffer.
+ */
+async function downloadTelegramFile(fileId) {
+  const file = await bot.getFile(fileId);
+  const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+
+  return new Promise((resolve, reject) => {
+    https.get(url, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    }).on('error', reject);
+  });
 }
 
 // ── Command handler ─────────────────────────────────────────────────
@@ -140,6 +160,59 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
   }
 });
 
+// ── /transcribe command handler ─────────────────────────────────────
+const TRANSCRIBE_REGEX = /^\/transcribe(?:@\w+)?\s*$/i;
+
+bot.onText(TRANSCRIBE_REGEX, async (msg) => {
+  const chatId = msg.chat.id;
+
+  if (!msg.reply_to_message) {
+    return bot.sendMessage(
+      chatId,
+      '💡 Reply to a voice message with /transcribe to transcribe it.',
+      { reply_to_message_id: msg.message_id }
+    );
+  }
+
+  const replied = msg.reply_to_message;
+  const voice = replied.voice || replied.audio || replied.video_note;
+
+  if (!voice) {
+    return bot.sendMessage(
+      chatId,
+      '⚠️ The replied message is not a voice/audio message.',
+      { reply_to_message_id: msg.message_id }
+    );
+  }
+
+  try {
+    await bot.sendChatAction(chatId, 'typing');
+    const audioBuffer = await downloadTelegramFile(voice.file_id);
+    const { text } = await transcribe(audioBuffer, 'voice.oga');
+
+    if (!text || text.trim().length === 0) {
+      return bot.sendMessage(
+        chatId,
+        '⚠️ Could not transcribe — no speech detected.',
+        { reply_to_message_id: replied.message_id }
+      );
+    }
+
+    await bot.sendMessage(
+      chatId,
+      `🎤 *Transcription:*\n\n${text}`,
+      { parse_mode: 'Markdown', reply_to_message_id: replied.message_id }
+    );
+  } catch (err) {
+    console.error('Transcription error:', err);
+    await bot.sendMessage(
+      chatId,
+      '❌ Sorry, something went wrong with the transcription.',
+      { reply_to_message_id: msg.message_id }
+    );
+  }
+});
+
 // ── Per-chat auto-translate state ───────────────────────────────────
 // Map<chatId, { target: string }>  — only present when auto mode is ON
 const autoTranslateChats = new Map();
@@ -193,19 +266,56 @@ bot.onText(AUTOOFF_REGEX, async (msg) => {
   );
 });
 
-// ── Auto-translate forwarded messages ───────────────────────────────
+// ── Auto-translate/transcribe forwarded messages ────────────────────
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
 
-  // Only act if auto mode is on for this chat
-  const autoConfig = autoTranslateChats.get(chatId);
-  if (!autoConfig) return;
-
-  // Only translate forwarded messages
+  // Only handle forwarded messages
   if (!msg.forward_date) return;
 
   // Skip commands
-  if (msg.text && (COMMAND_REGEX.test(msg.text) || AUTO_REGEX.test(msg.text))) return;
+  if (msg.text && (COMMAND_REGEX.test(msg.text) || AUTO_REGEX.test(msg.text) || TRANSCRIBE_REGEX.test(msg.text))) return;
+
+  // ── Auto-transcribe forwarded voice messages ──────────────────────
+  const voice = msg.voice || msg.audio || msg.video_note;
+  if (voice) {
+    try {
+      await bot.sendChatAction(chatId, 'typing');
+      const audioBuffer = await downloadTelegramFile(voice.file_id);
+      const { text } = await transcribe(audioBuffer, 'voice.oga');
+
+      if (!text || text.trim().length === 0) return;
+
+      let response = `🎤 *Transcription:*\n\n${text}`;
+
+      // If auto-translate is on, also translate the transcription
+      const autoConfig = autoTranslateChats.get(chatId);
+      if (autoConfig) {
+        try {
+          const result = await translate(text, { to: autoConfig.target });
+          if (result.from !== autoConfig.target) {
+            const from = friendlyName(result.from);
+            const to = friendlyName(autoConfig.target);
+            response += `\n\n🌐 *Translation* (${from} → ${to}):\n\n${result.trans_result.dst}`;
+          }
+        } catch (translateErr) {
+          console.error('Auto-translate after transcription error:', translateErr);
+        }
+      }
+
+      await bot.sendMessage(chatId, response, {
+        parse_mode: 'Markdown',
+        reply_to_message_id: msg.message_id,
+      });
+    } catch (err) {
+      console.error('Auto-transcribe error:', err);
+    }
+    return;
+  }
+
+  // ── Auto-translate forwarded text messages ─────────────────────────
+  const autoConfig = autoTranslateChats.get(chatId);
+  if (!autoConfig) return;
 
   const originalText = msg.text || msg.caption;
   if (!originalText || originalText.length < 2) return;
