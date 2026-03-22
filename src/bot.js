@@ -29,6 +29,14 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 console.log('🤖  Translate Bot is running… (Baidu Translate)');
 
+// ── Register command menu with Telegram ─────────────────────────────
+bot.setMyCommands([
+  { command: 'translate', description: 'Reply to a message to translate it' },
+  { command: 'tr', description: 'Short alias for /translate' },
+  { command: 'auto', description: 'Auto-translate forwarded messages (e.g. /auto to chinese)' },
+  { command: 'autooff', description: 'Turn off auto-translate' },
+]);
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 /**
