@@ -51,6 +51,17 @@ bot.onText(/^\/version(?:@\w+)?\s*$/i, async (msg) => {
     { reply_to_message_id: msg.message_id });
 });
 
+// ── Dedup guard (prevents double-processing the same voice message) ─
+const processedMessages = new Set();
+function dedup(chatId, msgId, action) {
+  const key = `${chatId}:${msgId}:${action}`;
+  if (processedMessages.has(key)) return true;
+  processedMessages.add(key);
+  // Clean up after 5 minutes
+  setTimeout(() => processedMessages.delete(key), 5 * 60 * 1000);
+  return false;
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 function parseTarget(text) {
@@ -90,6 +101,7 @@ const COMMAND_REGEX = /^\/(translate|tr(?![a-z]))(?:@\w+)?\s*(.*)?$/i;
 bot.onText(COMMAND_REGEX, async (msg, match) => {
   const chatId = msg.chat.id;
   const commandArgs = (match[2] || '').trim();
+  console.log(`[BOT] /translate handler fired — chat ${chatId}, msg ${msg.message_id}`);
 
   if (!msg.reply_to_message) {
     return bot.sendMessage(
@@ -174,6 +186,7 @@ const TRANSCRIBE_REGEX = /^\/transcribe(?:@\w+)?\s*$/i;
 
 bot.onText(TRANSCRIBE_REGEX, async (msg) => {
   const chatId = msg.chat.id;
+  console.log(`[BOT] /transcribe handler fired — chat ${chatId}, msg ${msg.message_id}`);
 
   if (!msg.reply_to_message) {
     return bot.sendMessage(chatId,
@@ -188,6 +201,12 @@ bot.onText(TRANSCRIBE_REGEX, async (msg) => {
     return bot.sendMessage(chatId,
       '⚠️ The replied message is not a voice/audio message.',
       { reply_to_message_id: msg.message_id });
+  }
+
+  const repliedMsgId = replied.message_id;
+  if (dedup(chatId, repliedMsgId, 'transcribe')) {
+    console.log(`[BOT] /transcribe — skipping, already processed msg ${repliedMsgId}`);
+    return;
   }
 
   try {
@@ -282,6 +301,7 @@ bot.on('message', async (msg) => {
 
   // Only handle forwarded messages
   if (!msg.forward_date) return;
+  console.log(`[BOT] forwarded message handler — chat ${chatId}, msg ${msg.message_id}`);
 
   // Skip commands
   if (msg.text && ALL_CMD.some((r) => r.test(msg.text))) return;
@@ -289,7 +309,12 @@ bot.on('message', async (msg) => {
   // ── Forwarded voice → auto-transcribe (only if enabled) ──────────
   const voice = msg.voice || msg.audio || msg.video_note;
   if (voice && autoTranscribeChats.has(chatId)) {
+    if (dedup(chatId, msg.message_id, 'transcribe')) {
+      console.log(`[BOT] auto-transcribe — skipping, already processed msg ${msg.message_id}`);
+      return;
+    }
     try {
+      console.log(`[BOT] auto-transcribe — processing forwarded voice msg ${msg.message_id}`);
       await bot.sendChatAction(chatId, 'typing');
       const audioBuffer = await downloadTelegramFile(voice.file_id);
       const { text } = await transcribe(audioBuffer, 'voice.oga');

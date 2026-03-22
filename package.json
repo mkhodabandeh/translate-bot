@@ -1,6 +1,6 @@
 {
   "name": "translate-bot",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Telegram bot that translates messages in group chats",
   "main": "src/bot.js",
   "scripts": {
