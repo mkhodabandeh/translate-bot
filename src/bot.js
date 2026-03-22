@@ -29,43 +29,29 @@ if (!BOT_TOKEN) {
 // ── Bot setup ───────────────────────────────────────────────────────
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-console.log('🤖  Translate Bot is running… (Baidu Translate)');
+console.log('🤖  Translate Bot is running… (Baidu Translate + Speechmatics)');
 
 // ── Register command menu with Telegram ─────────────────────────────
 bot.setMyCommands([
   { command: 'translate', description: 'Reply to a message to translate it' },
   { command: 'tr', description: 'Short alias for /translate' },
   { command: 'transcribe', description: 'Reply to a voice message to transcribe it' },
-  { command: 'auto', description: 'Auto-translate forwarded messages (e.g. /auto to chinese)' },
-  { command: 'autooff', description: 'Turn off auto-translate' },
+  { command: 'autotranslate', description: 'Auto-translate forwarded texts (e.g. /autotranslate to chinese)' },
+  { command: 'autotranscribe', description: 'Auto-transcribe forwarded voice messages' },
+  { command: 'autooff', description: 'Turn off all auto modes' },
 ]);
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-/**
- * Parse the text after /translate or /tr.
- * Accepted patterns:
- *   /translate                → target = default (en)
- *   /translate to chinese     → target = zh
- *   /translate french         → target = fra  (shorthand without "to")
- *   /translate to kor         → target = kor (Baidu code)
- */
 function parseTarget(text) {
   if (!text) return { target: DEFAULT_TARGET, raw: null };
-
-  // Remove leading "to " if present
   const cleaned = text.replace(/^to\s+/i, '').trim();
   if (!cleaned) return { target: DEFAULT_TARGET, raw: null };
-
   const resolved = resolveLanguage(cleaned);
   if (resolved) return { target: resolved, raw: cleaned };
-
   return { target: null, raw: cleaned };
 }
 
-/**
- * Find a friendly name for a Baidu language code (for display purposes).
- */
 function friendlyName(code) {
   const name = CODE_TO_NAME[code];
   return name ? capitalize(name) : code;
@@ -75,13 +61,9 @@ function capitalize(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/**
- * Download a file from Telegram's servers and return it as a Buffer.
- */
 async function downloadTelegramFile(fileId) {
   const file = await bot.getFile(fileId);
   const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
-
   return new Promise((resolve, reject) => {
     https.get(url, (res) => {
       const chunks = [];
@@ -92,14 +74,13 @@ async function downloadTelegramFile(fileId) {
   });
 }
 
-// ── Command handler ─────────────────────────────────────────────────
+// ── /translate and /tr command ──────────────────────────────────────
 const COMMAND_REGEX = /^\/(translate|tr)(?:@\w+)?\s*(.*)?$/i;
 
 bot.onText(COMMAND_REGEX, async (msg, match) => {
   const chatId = msg.chat.id;
   const commandArgs = (match[2] || '').trim();
 
-  // Must be a reply to another message
   if (!msg.reply_to_message) {
     return bot.sendMessage(
       chatId,
@@ -114,75 +95,57 @@ bot.onText(COMMAND_REGEX, async (msg, match) => {
 
   const replied = msg.reply_to_message;
   const originalText = replied.text || replied.caption
-    || (replied.poll && replied.poll.question)
-    || null;
+    || (replied.poll && replied.poll.question) || null;
 
   if (!originalText) {
-    return bot.sendMessage(
-      chatId,
+    return bot.sendMessage(chatId,
       '⚠️ The replied message has no text to translate.',
-      { reply_to_message_id: msg.message_id }
-    );
+      { reply_to_message_id: msg.message_id });
   }
 
-  // Parse target language
   const { target, raw } = parseTarget(commandArgs);
-
   if (!target) {
-    return bot.sendMessage(
-      chatId,
+    return bot.sendMessage(chatId,
       `❌ Unknown language: *${raw}*\n\nTry a language name like \`chinese\`, \`spanish\`, \`german\`, or a Baidu code like \`zh\`, \`spa\`, \`de\`.`,
-      { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
-    );
+      { parse_mode: 'Markdown', reply_to_message_id: msg.message_id });
   }
 
   try {
     const result = await translate(originalText, { to: target });
-
     const from = friendlyName(result.from);
     const to = friendlyName(target);
-
-    const response =
-      `🌐 *Translation* (${from} → ${to}):\n\n` +
-      `${result.trans_result.dst}`;
-
+    const response = `🌐 *Translation* (${from} → ${to}):\n\n${result.trans_result.dst}`;
     await bot.sendMessage(chatId, response, {
       parse_mode: 'Markdown',
-      reply_to_message_id: msg.reply_to_message.message_id,
+      reply_to_message_id: replied.message_id,
     });
   } catch (err) {
     console.error('Translation error:', err);
-    await bot.sendMessage(
-      chatId,
+    await bot.sendMessage(chatId,
       '❌ Sorry, something went wrong with the translation. Please try again.',
-      { reply_to_message_id: msg.message_id }
-    );
+      { reply_to_message_id: msg.message_id });
   }
 });
 
-// ── /transcribe command handler ─────────────────────────────────────
+// ── /transcribe command ─────────────────────────────────────────────
 const TRANSCRIBE_REGEX = /^\/transcribe(?:@\w+)?\s*$/i;
 
 bot.onText(TRANSCRIBE_REGEX, async (msg) => {
   const chatId = msg.chat.id;
 
   if (!msg.reply_to_message) {
-    return bot.sendMessage(
-      chatId,
+    return bot.sendMessage(chatId,
       '💡 Reply to a voice message with /transcribe to transcribe it.',
-      { reply_to_message_id: msg.message_id }
-    );
+      { reply_to_message_id: msg.message_id });
   }
 
   const replied = msg.reply_to_message;
   const voice = replied.voice || replied.audio || replied.video_note;
 
   if (!voice) {
-    return bot.sendMessage(
-      chatId,
+    return bot.sendMessage(chatId,
       '⚠️ The replied message is not a voice/audio message.',
-      { reply_to_message_id: msg.message_id }
-    );
+      { reply_to_message_id: msg.message_id });
   }
 
   try {
@@ -191,82 +154,82 @@ bot.onText(TRANSCRIBE_REGEX, async (msg) => {
     const { text } = await transcribe(audioBuffer, 'voice.oga');
 
     if (!text || text.trim().length === 0) {
-      return bot.sendMessage(
-        chatId,
+      return bot.sendMessage(chatId,
         '⚠️ Could not transcribe — no speech detected.',
-        { reply_to_message_id: replied.message_id }
-      );
+        { reply_to_message_id: replied.message_id });
     }
 
-    await bot.sendMessage(
-      chatId,
+    await bot.sendMessage(chatId,
       `🎤 *Transcription:*\n\n${text}`,
-      { parse_mode: 'Markdown', reply_to_message_id: replied.message_id }
-    );
+      { parse_mode: 'Markdown', reply_to_message_id: replied.message_id });
   } catch (err) {
     console.error('Transcription error:', err);
-    await bot.sendMessage(
-      chatId,
+    await bot.sendMessage(chatId,
       '❌ Sorry, something went wrong with the transcription.',
-      { reply_to_message_id: msg.message_id }
-    );
+      { reply_to_message_id: msg.message_id });
   }
 });
 
-// ── Per-chat auto-translate state ───────────────────────────────────
-// Map<chatId, { target: string }>  — only present when auto mode is ON
-const autoTranslateChats = new Map();
+// ── Per-chat auto state (independent toggles) ──────────────────────
+const autoTranslateChats = new Map();   // chatId → { target }
+const autoTranscribeChats = new Set();  // chatId
 
-// ── /auto command handler ───────────────────────────────────────────
-const AUTO_REGEX = /^\/auto(?:@\w+)?\s*(.*)?$/i;
+// ── /autotranslate command ──────────────────────────────────────────
+const AUTOTRANSLATE_REGEX = /^\/autotranslate(?:@\w+)?\s*(.*)?$/i;
 
-bot.onText(AUTO_REGEX, async (msg, match) => {
+bot.onText(AUTOTRANSLATE_REGEX, async (msg, match) => {
   const chatId = msg.chat.id;
   const commandArgs = (match[1] || '').trim();
-
   const { target, raw } = parseTarget(commandArgs);
 
   if (!target) {
-    return bot.sendMessage(
-      chatId,
-      `❌ Unknown language: *${raw}*\n\nTry: \`/auto to chinese\`, \`/auto spanish\`, \`/auto de\``,
-      { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
-    );
+    return bot.sendMessage(chatId,
+      `❌ Unknown language: *${raw}*\n\nTry: \`/autotranslate to chinese\`, \`/autotranslate spanish\``,
+      { parse_mode: 'Markdown', reply_to_message_id: msg.message_id });
   }
 
   autoTranslateChats.set(chatId, { target });
   const to = friendlyName(target);
 
-  await bot.sendMessage(
-    chatId,
-    `✅ Auto-translate is *ON*\n\nForwarded messages will be translated to *${to}*.\nUse /autooff to disable.`,
-    { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
-  );
+  await bot.sendMessage(chatId,
+    `✅ Auto-translate is *ON*\n\nForwarded text messages will be translated to *${to}*.\nUse /autooff to disable.`,
+    { parse_mode: 'Markdown', reply_to_message_id: msg.message_id });
 });
 
-// ── /autooff command handler ────────────────────────────────────────
+// ── /autotranscribe command ─────────────────────────────────────────
+const AUTOTRANSCRIBE_REGEX = /^\/autotranscribe(?:@\w+)?\s*$/i;
+
+bot.onText(AUTOTRANSCRIBE_REGEX, async (msg) => {
+  const chatId = msg.chat.id;
+  autoTranscribeChats.add(chatId);
+
+  await bot.sendMessage(chatId,
+    '✅ Auto-transcribe is *ON*\n\nForwarded voice messages will be transcribed.\nUse /autooff to disable.',
+    { parse_mode: 'Markdown', reply_to_message_id: msg.message_id });
+});
+
+// ── /autooff command ────────────────────────────────────────────────
 const AUTOOFF_REGEX = /^\/autooff(?:@\w+)?\s*$/i;
 
 bot.onText(AUTOOFF_REGEX, async (msg) => {
   const chatId = msg.chat.id;
+  const hadTranslate = autoTranslateChats.delete(chatId);
+  const hadTranscribe = autoTranscribeChats.delete(chatId);
 
-  if (!autoTranslateChats.has(chatId)) {
-    return bot.sendMessage(
-      chatId,
-      '💡 Auto-translate is already off.',
-      { reply_to_message_id: msg.message_id }
-    );
+  if (!hadTranslate && !hadTranscribe) {
+    return bot.sendMessage(chatId,
+      '💡 No auto modes are currently active.',
+      { reply_to_message_id: msg.message_id });
   }
 
-  autoTranslateChats.delete(chatId);
-  await bot.sendMessage(
-    chatId,
-    '🔴 Auto-translate is *OFF*',
-    { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
-  );
+  await bot.sendMessage(chatId,
+    '🔴 All auto modes are *OFF*',
+    { parse_mode: 'Markdown', reply_to_message_id: msg.message_id });
 });
 
-// ── Auto-translate/transcribe forwarded messages ────────────────────
+// ── Handle forwarded messages ───────────────────────────────────────
+const ALL_CMD = [COMMAND_REGEX, TRANSCRIBE_REGEX, AUTOTRANSLATE_REGEX, AUTOTRANSCRIBE_REGEX, AUTOOFF_REGEX];
+
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
 
@@ -274,11 +237,11 @@ bot.on('message', async (msg) => {
   if (!msg.forward_date) return;
 
   // Skip commands
-  if (msg.text && (COMMAND_REGEX.test(msg.text) || AUTO_REGEX.test(msg.text) || TRANSCRIBE_REGEX.test(msg.text))) return;
+  if (msg.text && ALL_CMD.some((r) => r.test(msg.text))) return;
 
-  // ── Auto-transcribe forwarded voice messages ──────────────────────
+  // ── Forwarded voice → auto-transcribe (only if enabled) ──────────
   const voice = msg.voice || msg.audio || msg.video_note;
-  if (voice) {
+  if (voice && autoTranscribeChats.has(chatId)) {
     try {
       await bot.sendChatAction(chatId, 'typing');
       const audioBuffer = await downloadTelegramFile(voice.file_id);
@@ -288,7 +251,7 @@ bot.on('message', async (msg) => {
 
       let response = `🎤 *Transcription:*\n\n${text}`;
 
-      // If auto-translate is on, also translate the transcription
+      // If auto-translate is also on, translate the transcription too
       const autoConfig = autoTranslateChats.get(chatId);
       if (autoConfig) {
         try {
@@ -313,7 +276,7 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // ── Auto-translate forwarded text messages ─────────────────────────
+  // ── Forwarded text → auto-translate (only if enabled) ─────────────
   const autoConfig = autoTranslateChats.get(chatId);
   if (!autoConfig) return;
 
@@ -322,16 +285,11 @@ bot.on('message', async (msg) => {
 
   try {
     const result = await translate(originalText, { to: autoConfig.target });
-
-    // Don't translate if already in the target language
     if (result.from === autoConfig.target) return;
 
     const from = friendlyName(result.from);
     const to = friendlyName(autoConfig.target);
-
-    const response =
-      `🌐 *Translation* (${from} → ${to}):\n\n` +
-      `${result.trans_result.dst}`;
+    const response = `🌐 *Translation* (${from} → ${to}):\n\n${result.trans_result.dst}`;
 
     await bot.sendMessage(chatId, response, {
       parse_mode: 'Markdown',
