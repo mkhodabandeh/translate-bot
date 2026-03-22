@@ -75,7 +75,7 @@ async function downloadTelegramFile(fileId) {
 }
 
 // ── /translate and /tr command ──────────────────────────────────────
-const COMMAND_REGEX = /^\/(translate|tr)(?:@\w+)?\s*(.*)?$/i;
+const COMMAND_REGEX = /^\/(translate|tr(?![a-z]))(?:@\w+)?\s*(.*)?$/i;
 
 bot.onText(COMMAND_REGEX, async (msg, match) => {
   const chatId = msg.chat.id;
