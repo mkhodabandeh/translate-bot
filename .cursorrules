@@ -1,0 +1,6 @@
+# Versioning Rules
+
+Every time that we update the bot, the version in `package.json` MUST be incremented according to these rules:
+- If a bug is fixed, increase the 3rd digit (patch): e.g., `2.1.0` -> `2.1.1`
+- If a small feature is added, increase the 2nd digit (minor) and reset the 3rd to 0: e.g., `2.1.0` -> `2.2.0`
+- If a major change is made, increase the 1st digit (major) and reset the 2nd and 3rd to 0: e.g., `2.1.0` -> `3.0.0`
