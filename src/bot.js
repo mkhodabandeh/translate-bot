@@ -38,8 +38,9 @@ bot.setMyCommands([
   { command: 'translate', description: 'Reply to a message to translate it' },
   { command: 'tr', description: 'Short alias for /translate' },
   { command: 'transcribe', description: 'Reply to a voice message to transcribe it' },
+  { command: 'settings', description: 'Configure auto-translation and transcription' },
   { command: 'autotranslate', description: 'Auto-translate forwarded texts (e.g. /autotranslate to chinese)' },
-  { command: 'autotranscribe', description: 'Auto-transcribe forwarded voice messages' },
+  { command: 'autotranscribe', description: 'Auto-transcribe voice messages' },
   { command: 'autooff', description: 'Turn off all auto modes' },
   { command: 'version', description: 'Show bot version' },
 ]);
@@ -73,9 +74,23 @@ function parseTarget(text) {
   return { target: null, raw: cleaned };
 }
 
+function parseTranscribeTarget(text) {
+  if (!text) return { target: 'fa', raw: null };
+  const raw = text.trim().toLowerCase();
+  const smMap = {
+    farsi: 'fa', persian: 'fa', english: 'en', spanish: 'es',
+    french: 'fr', german: 'de', italian: 'it', russian: 'ru',
+    arabic: 'ar', chinese: 'zh', japanese: 'ja', korean: 'ko'
+  };
+  if (smMap[raw]) return { target: smMap[raw], raw };
+  if (/^[a-z]{2}$/.test(raw)) return { target: raw, raw };
+  return { target: null, raw };
+}
+
 function friendlyName(code) {
+  if (code === 'fa') return 'Farsi';
   const name = CODE_TO_NAME[code];
-  return name ? capitalize(name) : code;
+  return name ? capitalize(name) : String(code || '').toUpperCase();
 }
 
 function capitalize(s) {
@@ -236,9 +251,101 @@ bot.onText(TRANSCRIBE_REGEX, async (msg) => {
   }
 });
 
-// ── Per-chat auto state (independent toggles) ──────────────────────
-const autoTranslateChats = new Map();   // chatId → { target }
-const autoTranscribeChats = new Set();  // chatId
+// ── Per-chat settings (consolidated state) ────────────────────────
+const chatSettings = new Map(); // chatId -> { autoTranslate, translateTarget, autoTranscribe, transcribeLang }
+
+function getSettings(chatId) {
+  if (!chatSettings.has(chatId)) {
+    chatSettings.set(chatId, {
+      autoTranslate: false,
+      translateTarget: DEFAULT_TARGET,
+      autoTranscribe: false,
+      transcribeLang: 'fa' // default Farsi
+    });
+  }
+  return chatSettings.get(chatId);
+}
+
+// ── /settings command ────────────────────────────────────────────────
+const SETTINGS_REGEX = /^\/settings(?:@\w+)?\s*$/i;
+
+bot.onText(SETTINGS_REGEX, async (msg) => {
+  const chatId = msg.chat.id;
+  await sendSettingsMenu(chatId, msg.message_id);
+});
+
+async function sendSettingsMenu(chatId, replyToMsgId = null, editMsgId = null) {
+  const settings = getSettings(chatId);
+  
+  const text = `⚙️ *Chat Settings*\n\nConfigure automatic features:`;
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: `Auto-Translate: ${settings.autoTranslate ? '✅ ON' : '❌ OFF'}`, callback_data: 'toggle_translate' }],
+      [{ text: `Translate To: ${friendlyName(settings.translateTarget)}`, callback_data: 'set_translate_lang' }],
+      [{ text: `Auto-Transcribe: ${settings.autoTranscribe ? '✅ ON' : '❌ OFF'}`, callback_data: 'toggle_transcribe' }],
+      [{ text: `Transcribe Default: ${friendlyName(settings.transcribeLang)}`, callback_data: 'set_transcribe_lang' }],
+      [{ text: 'Done', callback_data: 'close_settings' }]
+    ]
+  };
+
+  if (editMsgId) {
+    try {
+      await bot.editMessageText(text, {
+        chat_id: chatId,
+        message_id: editMsgId,
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+      });
+    } catch (e) { /* ignore message not modified error */ }
+  } else {
+    await bot.sendMessage(chatId, text, {
+      parse_mode: 'Markdown',
+      reply_to_message_id: replyToMsgId,
+      reply_markup: keyboard
+    });
+  }
+}
+
+// ── Callback Query Handler ──────────────────────────────────────────
+const pendingReplies = new Map(); // replyMsgId -> { type, menuMsgId }
+
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  const msgId = query.message.message_id;
+  const data = query.data;
+  const settings = getSettings(chatId);
+
+  try {
+    if (data === 'toggle_translate') {
+      settings.autoTranslate = !settings.autoTranslate;
+      await sendSettingsMenu(chatId, null, msgId);
+      await bot.answerCallbackQuery(query.id);
+    } else if (data === 'toggle_transcribe') {
+      settings.autoTranscribe = !settings.autoTranscribe;
+      await sendSettingsMenu(chatId, null, msgId);
+      await bot.answerCallbackQuery(query.id);
+    } else if (data === 'set_translate_lang') {
+      const resp = await bot.sendMessage(chatId, '📝 Enter the new default language for *Auto-Translate* (e.g. `en`, `spanish`, `zh`):', {
+        parse_mode: 'Markdown',
+        reply_markup: { force_reply: true }
+      });
+      pendingReplies.set(resp.message_id, { type: 'translate_lang', menuMsgId: msgId });
+      await bot.answerCallbackQuery(query.id);
+    } else if (data === 'set_transcribe_lang') {
+      const resp = await bot.sendMessage(chatId, '🎤 Enter the new default fallback language for *Auto-Transcribe* (e.g. `fa`, `en`, `german`):', {
+        parse_mode: 'Markdown',
+        reply_markup: { force_reply: true }
+      });
+      pendingReplies.set(resp.message_id, { type: 'transcribe_lang', menuMsgId: msgId });
+      await bot.answerCallbackQuery(query.id);
+    } else if (data === 'close_settings') {
+      await bot.deleteMessage(chatId, msgId).catch(() => {});
+      await bot.answerCallbackQuery(query.id);
+    }
+  } catch (err) {
+    console.error('Callback query error:', err);
+  }
+});
 
 // ── /autotranslate command ──────────────────────────────────────────
 const AUTOTRANSLATE_REGEX = /^\/autotranslate(?:@\w+)?\s*(.*)?$/i;
@@ -254,11 +361,13 @@ bot.onText(AUTOTRANSLATE_REGEX, async (msg, match) => {
       { parse_mode: 'Markdown', reply_to_message_id: msg.message_id });
   }
 
-  autoTranslateChats.set(chatId, { target });
+  const settings = getSettings(chatId);
+  settings.autoTranslate = true;
+  settings.translateTarget = target;
   const to = friendlyName(target);
 
   await bot.sendMessage(chatId,
-    `✅ Auto-translate is *ON*\n\nForwarded text messages will be translated to *${to}*.\nUse /autooff to disable.`,
+    `✅ Auto-translate is *ON*\n\nForwarded text messages will be translated to *${to}*.\nUse /settings to configure.`,
     { parse_mode: 'Markdown', reply_to_message_id: msg.message_id });
 });
 
@@ -267,10 +376,11 @@ const AUTOTRANSCRIBE_REGEX = /^\/autotranscribe(?:@\w+)?\s*$/i;
 
 bot.onText(AUTOTRANSCRIBE_REGEX, async (msg) => {
   const chatId = msg.chat.id;
-  autoTranscribeChats.add(chatId);
+  const settings = getSettings(chatId);
+  settings.autoTranscribe = true;
 
   await bot.sendMessage(chatId,
-    '✅ Auto-transcribe is *ON*\n\nForwarded voice messages will be transcribed.\nUse /autooff to disable.',
+    '✅ Auto-transcribe is *ON*\n\nIncoming voice messages will be transcribed.\nUse /settings to configure.',
     { parse_mode: 'Markdown', reply_to_message_id: msg.message_id });
 });
 
@@ -279,10 +389,12 @@ const AUTOOFF_REGEX = /^\/autooff(?:@\w+)?\s*$/i;
 
 bot.onText(AUTOOFF_REGEX, async (msg) => {
   const chatId = msg.chat.id;
-  const hadTranslate = autoTranslateChats.delete(chatId);
-  const hadTranscribe = autoTranscribeChats.delete(chatId);
+  const settings = getSettings(chatId);
+  const hadModes = settings.autoTranslate || settings.autoTranscribe;
+  settings.autoTranslate = false;
+  settings.autoTranscribe = false;
 
-  if (!hadTranslate && !hadTranscribe) {
+  if (!hadModes) {
     return bot.sendMessage(chatId,
       '💡 No auto modes are currently active.',
       { reply_to_message_id: msg.message_id });
@@ -293,22 +405,53 @@ bot.onText(AUTOOFF_REGEX, async (msg) => {
     { parse_mode: 'Markdown', reply_to_message_id: msg.message_id });
 });
 
-// ── Handle forwarded messages ───────────────────────────────────────
-const ALL_CMD = [COMMAND_REGEX, TRANSCRIBE_REGEX, AUTOTRANSLATE_REGEX, AUTOTRANSCRIBE_REGEX, AUTOOFF_REGEX];
+// ── Handle forwarded messages & replies ─────────────────────────────
+const ALL_CMD = [COMMAND_REGEX, TRANSCRIBE_REGEX, SETTINGS_REGEX, AUTOTRANSLATE_REGEX, AUTOTRANSCRIBE_REGEX, AUTOOFF_REGEX];
 
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
 
-  // Only handle forwarded messages
-  if (!msg.forward_date) return;
-  console.log(`[BOT] forwarded message handler — chat ${chatId}, msg ${msg.message_id}`);
+  // Handle replies to settings force-reply
+  if (msg.reply_to_message && pendingReplies.has(msg.reply_to_message.message_id)) {
+    const replyContext = pendingReplies.get(msg.reply_to_message.message_id);
+    pendingReplies.delete(msg.reply_to_message.message_id);
+
+    let target, raw;
+    if (replyContext.type === 'transcribe_lang') {
+      ({ target, raw } = parseTranscribeTarget(msg.text));
+    } else {
+      ({ target, raw } = parseTarget(msg.text));
+    }
+
+    if (!target) {
+      await bot.sendMessage(chatId, `❌ Unknown language: *${raw}*`, { parse_mode: 'Markdown' });
+      return;
+    }
+
+    const settings = getSettings(chatId);
+    if (replyContext.type === 'translate_lang') {
+      settings.translateTarget = target;
+      settings.autoTranslate = true;
+    } else if (replyContext.type === 'transcribe_lang') {
+      settings.transcribeLang = target;
+      settings.autoTranscribe = true;
+    }
+
+    // Clean up prompt messages and update menu
+    bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+    bot.deleteMessage(chatId, msg.reply_to_message.message_id).catch(() => {});
+    await sendSettingsMenu(chatId, null, replyContext.menuMsgId);
+    return;
+  }
 
   // Skip commands
   if (msg.text && ALL_CMD.some((r) => r.test(msg.text))) return;
 
-  // ── Forwarded voice → auto-transcribe (only if enabled) ──────────
+  // ── Voice → auto-transcribe (only if enabled, forwarded or directly sent) ──────────
   const voice = msg.voice || msg.audio || msg.video_note;
-  if (voice && autoTranscribeChats.has(chatId)) {
+  const settings = getSettings(chatId);
+
+  if (voice && settings.autoTranscribe) {
     if (dedup(chatId, msg.message_id, 'transcribe')) {
       console.log(`[BOT] auto-transcribe — skipping, already processed msg ${msg.message_id}`);
       return;
@@ -317,20 +460,19 @@ bot.on('message', async (msg) => {
       console.log(`[BOT] auto-transcribe — processing forwarded voice msg ${msg.message_id}`);
       await bot.sendChatAction(chatId, 'typing');
       const audioBuffer = await downloadTelegramFile(voice.file_id);
-      const { text } = await transcribe(audioBuffer, 'voice.oga');
+      const { text } = await transcribe(audioBuffer, 'voice.oga', settings.transcribeLang);
 
       if (!text || text.trim().length === 0) return;
 
       let response = `🎤 *Transcription:*\n\n${text}`;
 
       // If auto-translate is also on, translate the transcription too
-      const autoConfig = autoTranslateChats.get(chatId);
-      if (autoConfig) {
+      if (settings.autoTranslate) {
         try {
-          const result = await translate(text, { to: autoConfig.target });
-          if (result.from !== autoConfig.target) {
+          const result = await translate(text, { to: settings.translateTarget });
+          if (result.from !== settings.translateTarget) {
             const from = friendlyName(result.from);
-            const to = friendlyName(autoConfig.target);
+            const to = friendlyName(settings.translateTarget);
             response += `\n\n🌐 *Translation* (${from} → ${to}):\n\n${result.trans_result.dst}`;
           }
         } catch (translateErr) {
@@ -349,18 +491,18 @@ bot.on('message', async (msg) => {
   }
 
   // ── Forwarded text → auto-translate (only if enabled) ─────────────
-  const autoConfig = autoTranslateChats.get(chatId);
-  if (!autoConfig) return;
+  if (!msg.forward_date) return;
+  if (!settings.autoTranslate) return;
 
   const originalText = msg.text || msg.caption;
   if (!originalText || originalText.length < 2) return;
 
   try {
-    const result = await translate(originalText, { to: autoConfig.target });
-    if (result.from === autoConfig.target) return;
+    const result = await translate(originalText, { to: settings.translateTarget });
+    if (result.from === settings.translateTarget) return;
 
     const from = friendlyName(result.from);
-    const to = friendlyName(autoConfig.target);
+    const to = friendlyName(settings.translateTarget);
     const response = `🌐 *Translation* (${from} → ${to}):\n\n${result.trans_result.dst}`;
 
     await bot.sendMessage(chatId, response, {
